@@ -1,0 +1,570 @@
+-- LocalScript (colocar dentro de StarterGui)
+-- Implementa:
+-- - Botões: Esp Best, Esp Base (dois modos de ESP)
+-- - SAVE POSITION (salva CFrame do jogador)
+-- - TP TO SAVED (teleporta para a posição salva)
+-- - Discord (tenta copiar o link pro clipboard, se possível; senão mostra o link)
+-- - Minimizar/Restaurar e arrastar a GUI usando o botão de minimizar como "handle" (arraste o ícone para mover)
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+local savedCFrame = nil
+local espMode = nil -- "Best", "Base", or nil
+local highlights = {} -- [player] = {highlight = Highlight, billboard = BillboardGui}
+
+-- Coloque seu link de discord aqui (ou deixe em branco)
+local discordURL = "https://discord.gg/SEU_LINK_AQUI"
+
+-- Helper: cria interface básica (com minimizar e arrastar pelo botão de minimizar)
+local function createGUI()
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "PiterHubGui"
+    screenGui.ResetOnSpawn = false
+    screenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+    local frame = Instance.new("Frame")
+    frame.Name = "MainFrame"
+    frame.Size = UDim2.new(0, 260, 0, 360)
+    frame.Position = UDim2.new(0, 20, 0.25, 0)
+    frame.BackgroundColor3 = Color3.fromRGB(25, 28, 48)
+    frame.BorderSizePixel = 0
+    frame.Parent = screenGui
+    frame.Visible = true
+    frame.ClipsDescendants = true
+    frame.Rotation = 0
+    frame.Active = true
+    frame.SizeConstraint = Enum.SizeConstraint.RelativeYY
+
+    local originalSize = frame.Size
+    local minimizedSize = UDim2.new(0, 180, 0, 50)
+    local isMinimized = false
+
+    -- Title label
+    local title = Instance.new("TextLabel")
+    title.Parent = frame
+    title.Size = UDim2.new(1, -60, 0, 36)
+    title.Position = UDim2.new(0, 10, 0, 8)
+    title.BackgroundTransparency = 1
+    title.Text = "Piter HUB"
+    title.Font = Enum.Font.GothamSemibold
+    title.TextSize = 20
+    title.TextColor3 = Color3.fromRGB(160, 190, 255)
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Name = "TitleLabel"
+
+    -- Minimize button (top-right) — também será o handle para arrastar
+    local minimizeBtn = Instance.new("TextButton")
+    minimizeBtn.Size = UDim2.new(0, 36, 0, 36)
+    minimizeBtn.Position = UDim2.new(1, -46, 0, 8)
+    minimizeBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    minimizeBtn.BorderSizePixel = 0
+    minimizeBtn.Font = Enum.Font.GothamBold
+    minimizeBtn.TextSize = 20
+    minimizeBtn.TextColor3 = Color3.fromRGB(240,240,240)
+    minimizeBtn.Text = "-" -- "-" = restaurado, "▢" = minimizado (alternância)
+    minimizeBtn.Name = "MinimizeBtn"
+    minimizeBtn.Parent = frame
+
+    -- top two small buttons: Esp Best and Esp Base
+    local function makeSmallButton(name)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0.48, 0, 0, 36)
+        btn.BackgroundColor3 = Color3.fromRGB(70, 75, 110)
+        btn.BorderSizePixel = 0
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 16
+        btn.TextColor3 = Color3.fromRGB(240,240,240)
+        btn.Text = name
+        return btn
+    end
+
+    local espBestBtn = makeSmallButton("Esp Best")
+    espBestBtn.Position = UDim2.new(0, 10, 0, 70)
+    espBestBtn.Parent = frame
+
+    local espBaseBtn = makeSmallButton("Esp Base")
+    espBaseBtn.Position = UDim2.new(0, 140, 0, 70)
+    espBaseBtn.Parent = frame
+
+    -- Save Position button
+    local saveBtn = Instance.new("TextButton")
+    saveBtn.Parent = frame
+    saveBtn.Size = UDim2.new(1, -20, 0, 46)
+    saveBtn.Position = UDim2.new(0, 10, 0, 130)
+    saveBtn.BackgroundColor3 = Color3.fromRGB(95, 100, 150)
+    saveBtn.BorderSizePixel = 0
+    saveBtn.Font = Enum.Font.GothamBold
+    saveBtn.TextSize = 20
+    saveBtn.TextColor3 = Color3.fromRGB(240,240,240)
+    saveBtn.Text = "SAVE POSITION"
+
+    -- TP to saved button
+    local tpBtn = Instance.new("TextButton")
+    tpBtn.Parent = frame
+    tpBtn.Size = UDim2.new(1, -20, 0, 46)
+    tpBtn.Position = UDim2.new(0, 10, 0, 190)
+    tpBtn.BackgroundColor3 = Color3.fromRGB(95, 100, 150)
+    tpBtn.BorderSizePixel = 0
+    tpBtn.Font = Enum.Font.GothamBold
+    tpBtn.TextSize = 20
+    tpBtn.TextColor3 = Color3.fromRGB(240,240,240)
+    tpBtn.Text = "TP TO SAVED"
+
+    -- Discord button
+    local discBtn = Instance.new("TextButton")
+    discBtn.Parent = frame
+    discBtn.Size = UDim2.new(1, -20, 0, 46)
+    discBtn.Position = UDim2.new(0, 10, 0, 250)
+    discBtn.BackgroundColor3 = Color3.fromRGB(70, 45, 120)
+    discBtn.BorderSizePixel = 0
+    discBtn.Font = Enum.Font.GothamBold
+    discBtn.TextSize = 18
+    discBtn.TextColor3 = Color3.fromRGB(240,240,240)
+    discBtn.Text = "Discord"
+
+    -- Funções de minimizar/restaurar
+    local function setMinimized(min)
+        isMinimized = min
+        if isMinimized then
+            -- ocultar todos os filhos exceto título e botão minimizar
+            for _, child in ipairs(frame:GetChildren()) do
+                if child ~= title and child ~= minimizeBtn then
+                    if child:IsA("GuiObject") then
+                        child.Visible = false
+                    end
+                end
+            end
+            minimizeBtn.Text = "▢"
+            frame.Size = minimizedSize
+        else
+            for _, child in ipairs(frame:GetChildren()) do
+                if child ~= title and child ~= minimizeBtn then
+                    if child:IsA("GuiObject") then
+                        child.Visible = true
+                    end
+                end
+            end
+            minimizeBtn.Text = "-"
+            frame.Size = originalSize
+        end
+    end
+
+    -- Removemos Activated para manejar clique/arraste no InputEnded
+    -- minimizeBtn.Activated:Connect(function() setMinimized(not isMinimized) end)
+
+    return {
+        ScreenGui = screenGui,
+        Frame = frame,
+        EspBest = espBestBtn,
+        EspBase = espBaseBtn,
+        SaveBtn = saveBtn,
+        TPBtn = tpBtn,
+        DiscBtn = discBtn,
+        MinimizeBtn = minimizeBtn,
+        TitleLabel = title,
+        _originalSize = originalSize,
+        _minimizedSize = minimizedSize,
+        _isMinimized = function() return isMinimized end,
+        _setMinimized = setMinimized
+    }
+end
+
+local gui = createGUI()
+
+-- Arrastar usando especificamente o botão de minimizar como handle
+do
+    local frame = gui.Frame
+    local handle = gui.MinimizeBtn
+
+    local dragging = false
+    local dragStart = Vector2.new()
+    local startPos = UDim2.new()
+    local moved = false
+    local MOVE_THRESHOLD = 6 -- pixels para diferenciar clique de arraste
+
+    -- InputBegan: inicia possível arraste quando o botão de minimizar for pressionado
+    handle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            moved = false
+            dragStart = input.Position
+            startPos = frame.Position
+            -- Capture o input para garantir recebimento do InputChanged/InputEnded
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    -- termina no InputEnded (tratado abaixo)
+                end
+            end)
+        end
+    end)
+
+    -- Enquanto o usuário mover, atualiza a posição do frame
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            local delta = input.Position - dragStart
+            if delta.Magnitude >= MOVE_THRESHOLD then
+                moved = true
+            end
+
+            -- calcula nova posição em offsets mantendo os scales originais
+            local newX = startPos.X.Offset + delta.X
+            local newY = startPos.Y.Offset + delta.Y
+
+            -- clamp simples para manter dentro da viewport
+            local viewportSize = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920, 1080)
+            local fw = frame.AbsoluteSize.X
+            local fh = frame.AbsoluteSize.Y
+            if fw == 0 then fw = gui._originalSize.X.Offset end
+            if fh == 0 then fh = gui._originalSize.Y.Offset end
+
+            newX = math.clamp(newX, -fw + 20, viewportSize.X - 20)
+            newY = math.clamp(newY, -fh + 10, viewportSize.Y - 10)
+
+            frame.Position = UDim2.new(startPos.X.Scale, newX, startPos.Y.Scale, newY)
+        end
+    end)
+
+    -- InputEnded: se não houve movimento significativo, trata como clique (toggle minimizar).
+    -- Se houve movimento, apenas finaliza o arraste.
+    handle.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            -- small safety: finalize dragging flag
+            local wasMoved = moved
+            dragging = false
+            moved = false
+
+            -- Se não arrastou (clicou), toggle minimizar
+            if not wasMoved then
+                gui._setMinimized(not gui._isMinimized())
+            end
+        end
+    end)
+end
+
+-- (Opcional) Mantém arrastar funcionando também pelo título (descomente se quiser)
+--[[
+do
+    local title = gui.TitleLabel
+    -- Implementação similar ao handle acima se quiser arrastar pela label do título
+end
+]]
+
+-- ESP helpers (sem alterações)
+local function makeBillboardForCharacter(character, player)
+    local head = character:FindFirstChild("Head")
+    if not head then return nil end
+
+    -- parent to head so it follows the character; it's fine client-side
+    local bb = Instance.new("BillboardGui")
+    bb.Name = "ESP_Billboard"
+    bb.Adornee = head
+    bb.Size = UDim2.new(0, 140, 0, 36)
+    bb.AlwaysOnTop = true
+    bb.StudsOffset = Vector3.new(0, 1.5, 0)
+    bb.Parent = head
+
+    local label = Instance.new("TextLabel")
+    label.Name = "ESP_Label"
+    label.Size = UDim2.new(1,0,1,0)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = Color3.fromRGB(255,255,255)
+    label.TextStrokeTransparency = 0.6
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 14
+    label.Text = player.Name
+    label.TextXAlignment = Enum.TextXAlignment.Center
+    label.TextYAlignment = Enum.TextYAlignment.Center
+    label.Parent = bb
+
+    return bb
+end
+
+local function makeHighlightForCharacter(character, mode)
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "ESP_Highlight"
+    highlight.Adornee = character
+    highlight.Enabled = true
+    highlight.Parent = character
+    if mode == "Best" then
+        highlight.FillColor = Color3.fromRGB(0, 160, 255)
+        highlight.OutlineColor = Color3.fromRGB(0, 200, 255)
+        highlight.FillTransparency = 0.35
+        highlight.OutlineTransparency = 0
+    else -- "Base"
+        highlight.FillColor = Color3.fromRGB(120, 120, 120)
+        highlight.OutlineColor = Color3.fromRGB(255,255,255)
+        highlight.FillTransparency = 0.8
+        highlight.OutlineTransparency = 0.5
+    end
+    return highlight
+end
+
+local function enableESPForPlayer(player, mode)
+    if player == LocalPlayer then return end
+    if highlights[player] then
+        local data = highlights[player]
+        if data and data.highlight and data.highlight.Parent then
+            if mode == "Best" then
+                data.highlight.FillColor = Color3.fromRGB(0,160,255)
+                data.highlight.OutlineColor = Color3.fromRGB(0,200,255)
+                data.highlight.FillTransparency = 0.35
+                data.highlight.OutlineTransparency = 0
+            else
+                data.highlight.FillColor = Color3.fromRGB(120,120,120)
+                data.highlight.OutlineColor = Color3.fromRGB(255,255,255)
+                data.highlight.FillTransparency = 0.8
+                data.highlight.OutlineTransparency = 0.5
+            end
+        end
+        return
+    end
+
+    local character = player.Character
+    if not character then return end
+    local root = character:FindFirstChild("HumanoidRootPart") or character:FindFirstChild("Torso") or character:FindFirstChild("UpperTorso")
+    if not root then return end
+
+    local highlightInstance
+    local ok, res = pcall(function()
+        return makeHighlightForCharacter(character, mode)
+    end)
+    if ok then
+        highlightInstance = res
+    end
+
+    local billboardInstance
+    local ok2, res2 = pcall(function()
+        return makeBillboardForCharacter(character, player)
+    end)
+    if ok2 then
+        billboardInstance = res2
+    end
+
+    highlights[player] = {
+        highlight = highlightInstance,
+        billboard = billboardInstance
+    }
+
+    if character then
+        character.AncestryChanged:Connect(function(_, parent)
+            if not parent then
+                if highlights[player] then
+                    if highlights[player].highlight and highlights[player].highlight.Parent then
+                        highlights[player].highlight:Destroy()
+                    end
+                    if highlights[player].billboard and highlights[player].billboard.Parent then
+                        highlights[player].billboard:Destroy()
+                    end
+                    highlights[player] = nil
+                end
+            end
+        end)
+    end
+end
+
+local function disableESPForPlayer(player)
+    local data = highlights[player]
+    if not data then return end
+    if data.highlight and data.highlight.Parent then
+        data.highlight:Destroy()
+    end
+    if data.billboard and data.billboard.Parent then
+        data.billboard:Destroy()
+    end
+    highlights[player] = nil
+end
+
+local function updateAllESP(mode)
+    espMode = mode
+    if not mode then
+        for p,_ in pairs(highlights) do
+            disableESPForPlayer(p)
+        end
+        return
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            enableESPForPlayer(p, mode)
+        end
+    end
+end
+
+-- Mantém ESP ao entrar/respawnar jogadores
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function(char)
+        wait(0.2)
+        if espMode then
+            enableESPForPlayer(player, espMode)
+        end
+    end)
+end)
+
+Players.PlayerRemoving:Connect(function(player)
+    disableESPForPlayer(player)
+end)
+
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LocalPlayer then
+        if p.Character then
+            if espMode then
+                enableESPForPlayer(p, espMode)
+            end
+        end
+        p.CharacterAdded:Connect(function()
+            wait(0.2)
+            if espMode then
+                enableESPForPlayer(p, espMode)
+            end
+        end)
+    end
+end
+
+-- Atualiza texto de distâncias (opcional, roda no Heartbeat)
+RunService.Heartbeat:Connect(function()
+    for player, data in pairs(highlights) do
+        if data and data.billboard and data.billboard.Parent and player.Character then
+            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+            local myHrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if hrp and myHrp then
+                local dist = (hrp.Position - myHrp.Position).Magnitude
+                local lbl = data.billboard:FindFirstChild("ESP_Label")
+                if lbl then
+                    lbl.Text = string.format("%s | %.0f studs", player.Name, dist)
+                end
+            end
+        end
+    end
+end)
+
+-- Botões: conexões
+gui.EspBest.Activated:Connect(function()
+    if espMode == "Best" then
+        updateAllESP(nil) -- desligar
+        gui.EspBest.BackgroundColor3 = Color3.fromRGB(70,75,110)
+    else
+        updateAllESP("Best")
+        gui.EspBest.BackgroundColor3 = Color3.fromRGB(30,160,255)
+        gui.EspBase.BackgroundColor3 = Color3.fromRGB(70,75,110)
+    end
+end)
+
+gui.EspBase.Activated:Connect(function()
+    if espMode == "Base" then
+        updateAllESP(nil)
+        gui.EspBase.BackgroundColor3 = Color3.fromRGB(70,75,110)
+    else
+        updateAllESP("Base")
+        gui.EspBase.BackgroundColor3 = Color3.fromRGB(80,140,200)
+        gui.EspBest.BackgroundColor3 = Color3.fromRGB(70,75,110)
+    end
+end)
+
+gui.SaveBtn.Activated:Connect(function()
+    local char = LocalPlayer.Character
+    if not char then
+        StarterGui:SetCore("SendNotification", {
+            Title = "Save Position";
+            Text = "Character não encontrado.";
+            Duration = 3;
+        })
+        return
+    end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then
+        StarterGui:SetCore("SendNotification", {
+            Title = "Save Position";
+            Text = "HumanoidRootPart não encontrado.";
+            Duration = 3;
+        })
+        return
+    end
+    savedCFrame = hrp.CFrame
+    StarterGui:SetCore("SendNotification", {
+        Title = "Save Position";
+        Text = "Posição salva!";
+        Duration = 2;
+    })
+end)
+
+gui.TPBtn.Activated:Connect(function()
+    if not savedCFrame then
+        StarterGui:SetCore("SendNotification", {
+            Title = "TP TO SAVED";
+            Text = "Nenhuma posição salva.";
+            Duration = 2,
+        })
+        return
+    end
+    local char = LocalPlayer.Character
+    if not char then
+        StarterGui:SetCore("SendNotification", {
+            Title = "TP TO SAVED";
+            Text = "Character não encontrado.";
+            Duration = 2,
+        })
+        return
+    end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then
+        StarterGui:SetCore("SendNotification", {
+            Title = "TP TO SAVED";
+            Text = "HumanoidRootPart não encontrado.";
+            Duration = 2,
+        })
+        return
+    end
+
+    local success, err = pcall(function()
+        hrp.AssemblyLinearVelocity = Vector3.new(0,0,0)
+        hrp.CFrame = savedCFrame + Vector3.new(0, 2, 0)
+    end)
+    if success then
+        StarterGui:SetCore("SendNotification", {
+            Title = "TP TO SAVED";
+            Text = "Teleport realizado.";
+            Duration = 2;
+        })
+    else
+        StarterGui:SetCore("SendNotification", {
+            Title = "TP TO SAVED";
+            Text = "Erro: "..tostring(err);
+            Duration = 3;
+        })
+    end
+end)
+
+gui.DiscBtn.Activated:Connect(function()
+    local ok, err = pcall(function()
+        if setclipboard then
+            setclipboard(discordURL)
+        else
+            error("Sem setclipboard disponível")
+        end
+    end)
+
+    if ok then
+        StarterGui:SetCore("SendNotification", {
+            Title = "Discord";
+            Text = "Link copiado para o clipboard!";
+            Duration = 3;
+        })
+    else
+        StarterGui:SetCore("SendNotification", {
+            Title = "Discord";
+            Text = "Abra o link: "..discordURL;
+            Duration = 5;
+        })
+    end
+end)
+
+-- Inicial: define cores iniciais
+gui.EspBest.BackgroundColor3 = Color3.fromRGB(70,75,110)
+gui.EspBase.BackgroundColor3 = Color3.fromRGB(70,75,110)
+
+-- Opcional: inicia minimizado se desejar:
+-- gui._setMinimized(true)
